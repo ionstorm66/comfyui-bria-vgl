@@ -43,7 +43,7 @@ def wait_for_worker(process, timeout_seconds):
                 process.wait()
 
 
-def run_vgl(text, llm, seed, output_format, image, timeout_seconds, mask=None):
+def run_vgl(text, llm, seed, output_format, image, timeout_seconds, mask=None, extra_images=None):
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be a positive finite number.")
     check_interrupted()
@@ -52,6 +52,11 @@ def run_vgl(text, llm, seed, output_format, image, timeout_seconds, mask=None):
         image_path = folder / "image.png"
         if image is not None:
             image.save(image_path)
+        extra_image_paths = []
+        for index, reference in enumerate(extra_images or [], start=2):
+            path = folder / f"image_{index}.png"
+            reference.save(path)
+            extra_image_paths.append(str(path))
         mask_path = folder / "mask.png"
         if mask is not None:
             mask.save(mask_path)
@@ -59,6 +64,7 @@ def run_vgl(text, llm, seed, output_format, image, timeout_seconds, mask=None):
             "text": text, "llm": llm, "seed": seed, "output_format": output_format,
             "image_path": str(image_path) if image is not None else None,
             "mask_path": str(mask_path) if mask is not None else None,
+            "extra_image_paths": extra_image_paths,
         }
         request_path = folder / "request.json"
         response_path = folder / "response.json"
@@ -197,6 +203,9 @@ class BriaVGLPrompt:
                 "mask": ("MASK", {"tooltip": "White/1 edits, black/0 keeps. Requires an image and edit text; dimensions must match."}),
                 "timeout_seconds": ("INT", {"default": 180, "min": 1, "max": 3600,
                     "tooltip": "Maximum total wait, including startup and provider retries. Stop cancels the local worker."}),
+                "image_2": ("IMAGE", {"tooltip": "Reference <image_2>. Connect image first. Requires edit text; no mask."}),
+                "image_3": ("IMAGE", {"tooltip": "Reference <image_3>. Connect image and image_2 first."}),
+                "image_4": ("IMAGE", {"tooltip": "Reference <image_4>. Connect all earlier image inputs first."}),
             },
         }
 
@@ -210,11 +219,19 @@ class BriaVGLPrompt:
     CATEGORY = "Bria/VGL"
     DESCRIPTION = "Create a VGL prompt from text, an image, or both using the selected LLM provider. Credentials come from the ComfyUI process environment."
 
-    def generate(self, text, provider, model="", output_format="VGL JSON", seed=0, image=None, timeout_seconds=180, mask=None):
+    def generate(self, text, provider, model="", output_format="VGL JSON", seed=0, image=None, timeout_seconds=180, mask=None,
+                 image_2=None, image_3=None, image_4=None):
         check_interrupted()
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be a positive finite number.")
         text = text.strip()
+        references = [image, image_2, image_3, image_4]
+        for index, reference in enumerate(references[1:], start=1):
+            if reference is not None and references[index - 1] is None:
+                raise ValueError("Connect reference images in order: image, image_2, image_3, image_4; do not skip inputs.")
+        extra_images = [image_to_pil(ref) for ref in references[1:] if ref is not None]
+        if extra_images and (not text or mask is not None):
+            raise ValueError("Multiple reference images require nonempty edit text and cannot be combined with a mask.")
         if mask is not None and (image is None or not text):
             raise ValueError("A mask requires an image and nonempty edit text.")
         if not text and image is None:
@@ -226,11 +243,13 @@ class BriaVGLPrompt:
         pil_mask = mask_to_pil(mask, pil_image.size) if mask is not None else None
         masked_image = masked_image_output(pil_image, pil_mask) if pil_mask is not None else image
         key = self.cache_key(text, provider, llm, output_format, seed, pil_image, pil_mask)
+        key += (tuple((ref.size, hashlib.sha256(ref.tobytes()).digest()) for ref in extra_images),)
         check_interrupted()
         cached = self._cached_prompt
         if cached is not None and cached[0] == key:
             return (cached[1], masked_image)
-        result = run_vgl(text, llm, seed, output_format, pil_image, timeout_seconds, mask=pil_mask)
+        options = {"extra_images": extra_images} if extra_images else {}
+        result = run_vgl(text, llm, seed, output_format, pil_image, timeout_seconds, mask=pil_mask, **options)
         check_interrupted()
         self._cached_prompt = (key, result)
         return (result, masked_image)

@@ -79,6 +79,16 @@ class InterruptionTests(unittest.TestCase):
         })
         self.assert_cleaned()
 
+    def test_four_images_roundtrip_through_worker(self):
+        images = [Image.new("RGB", (n + 1, 2), (n * 50, 0, 0)) for n in range(4)]
+        result = nodes.run_vgl("combine", "openai/test", 7, "VGL JSON", images[0], 10,
+                               extra_images=images[1:])
+        self.assertEqual(json.loads(result), {
+            "image_sizes": [[n + 1, 2] for n in range(4)],
+            "pixels": [[n * 50, 0, 0] for n in range(4)],
+        })
+        self.assert_cleaned()
+
     def test_provider_error_roundtrip(self):
         with self.assertRaisesRegex(RuntimeError, "test provider failure"):
             self.run_request("__error__")

@@ -55,6 +55,20 @@ class LocalTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 BriaVGLPrepare().prepare(**args)
 
+    def test_worker_uses_real_multi_image_payload(self):
+        from PIL import Image
+        from bria_vgl.dialects.thales import EditImages
+        import vgl_worker
+        images = [Image.new("RGB", (n + 2, 3)) for n in range(4)]
+        with patch("bria_vgl.modify") as modify, patch("bria_vgl.create", side_effect=AssertionError("Must modify")):
+            modify.return_value.model_dump_json.return_value = '{}'
+            vgl_worker.generate("combine <image_1> and <image_4>", "test", 0, "VGL JSON",
+                                images[0], extra_images=images[1:])
+            payload = modify.call_args.args[0]
+            self.assertIsInstance(payload, EditImages)
+            self.assertEqual(payload.images, images)
+            self.assertEqual(len(payload.to_request().images), 4)
+
     def test_validation_and_fences(self):
         raw = json.dumps(self.scene)
         for value in (raw, "```json\n" + raw + "\n```"):

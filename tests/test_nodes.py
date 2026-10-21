@@ -55,6 +55,10 @@ class EditImageWithMask(Payload):
     pass
 
 
+class EditImages(Payload):
+    pass
+
+
 class Scene:
     short_description = "A red fox."
 
@@ -80,6 +84,7 @@ class NodeTests(unittest.TestCase):
         dialect = types.ModuleType("bria_vgl.dialects.thales")
         dialect.Generate, dialect.Caption, dialect.Inspire = Generate, Caption, Inspire
         dialect.EditImageWithMask = EditImageWithMask
+        dialect.EditImages = EditImages
         self.modules = patch.dict(sys.modules, {
             "torch": torch,
             "bria_vgl": api,
@@ -89,8 +94,8 @@ class NodeTests(unittest.TestCase):
         self.modules.start()
         self.addCleanup(self.modules.stop)
         # Real worker logic with a fake provider; process tests are separate.
-        runner = patch("nodes.run_vgl", side_effect=lambda text, llm, seed, output_format, image, timeout_seconds, mask=None:
-                       vgl_worker.generate(text, llm, seed, output_format, image, mask))
+        runner = patch("nodes.run_vgl", side_effect=lambda text, llm, seed, output_format, image, timeout_seconds, mask=None, extra_images=None:
+                       vgl_worker.generate(text, llm, seed, output_format, image, mask, extra_images))
         runner.start()
         self.addCleanup(runner.stop)
 
@@ -229,6 +234,35 @@ class NodeTests(unittest.TestCase):
 
     def test_text_input(self):
         self.assertEqual(BriaVGLTextInput().value("hello\nworld"), ("hello\nworld",))
+
+    def test_multiple_references_order_and_cache(self):
+        refs = [Tensor(np.full((1, n + 1, 2, 3), n / 3)) for n in range(4)]
+        node = BriaVGLPrompt()
+        args = dict(text="combine <image_1> and <image_4>", provider="Google AI Studio",
+                    image=refs[0], image_2=refs[1], image_3=refs[2], image_4=refs[3])
+        with patch("bria_vgl.create", side_effect=AssertionError("Must use modify")):
+            self.assertIs(node.generate(**args)[1], refs[0])
+            payload = self.calls[-1][0]
+            self.assertIsInstance(payload, EditImages)
+            self.assertEqual([im.size for im in payload.images], [(2, n + 1) for n in range(4)])
+            node.generate(**args)
+            self.assertEqual(len(self.calls), 1)
+            for ref in refs[1:]:
+                ref.data[0, 0, 0, 0] = 0.1
+                node.generate(**args)
+            self.assertEqual(len(self.calls), 4)
+            node.generate(**(args | {"image_3": None, "image_4": None}))
+            self.assertEqual(len(self.calls[-1][0].images), 2)
+
+    def test_invalid_reference_combinations(self):
+        ref = Tensor(np.zeros((1, 2, 2, 3)))
+        for options in ({"image_2": ref}, {"image": ref, "image_3": ref},
+                        {"image": ref, "image_2": ref, "text": " "},
+                        {"image": ref, "image_2": ref, "mask": Tensor(np.ones((1, 2, 2)))},
+                        {"image": ref, "image_2": Tensor(np.zeros((2, 2, 2, 3)))}):
+            with self.assertRaises(ValueError):
+                BriaVGLPrompt().generate(**({"text": "edit", "provider": "Google AI Studio"} | options))
+        self.assertFalse(self.calls)
 
     def test_same_inputs_and_seed_reuse_result(self):
         node = BriaVGLPrompt()

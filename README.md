@@ -43,10 +43,29 @@ VGL-aware workflow such as FIBO. `Short description` returns the scene's concise
 natural-language description for ordinary text prompt inputs. It omits the
 detailed structured fields. This node creates prompt text; it does not generate images.
 
-Exactly one image is accepted. Select a single image from a batch upstream.
+Each image input accepts exactly one image. Select a single image from a batch upstream.
 ComfyUI float images are converted to RGB; transparent pixels are composited on white.
 Changing the seed requests a new result; repeatability depends on the provider.
 ComfyUI can reuse cached output when inputs are unchanged.
+
+### Multiple reference images
+
+**Bria VGL Prompt** accepts up to four images. Connect them in order without gaps:
+`image` is `<image_1>`, followed by `image_2`, `image_3`, and `image_4`.
+With two or more images, enter an edit instruction such as
+"put the lamp from <image_2> in <image_1>, using the colors from <image_3>".
+The node uses Bria's `EditImages` through `modify()`. Select **VGL JSON** to
+retain the structured edit instruction. Different image sizes are supported.
+
+Multiple references require nonempty text and cannot be combined with `mask`;
+Bria's masked-edit payload supports one image. Single-image behavior is unchanged.
+The `masked_image` output passes through the first image in multi-image mode.
+Connect the original references separately to your downstream image model in the
+same order; VGL outputs a prompt, not the edited image. All reference images
+participate in the prompt cache, so changing any reference requests a new result.
+
+This feature applies to the provider-backed **Bria VGL Prompt** node.
+**Bria VGL Prepare (Local)** retains its single-image Generate Text workflow.
 
 ### Masked edits
 
