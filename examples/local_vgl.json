@@ -1,0 +1,223 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "BriaVGLPrepare",
+      "pos": [
+        50,
+        100
+      ],
+      "size": [
+        340,
+        340
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "system_prompt",
+          "type": "STRING",
+          "links": [
+            1
+          ]
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            2
+          ]
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "masked_image",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "require_edit_instruction",
+          "type": "BOOLEAN",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BriaVGLPrepare"
+      },
+      "widgets_values": [
+        "A red fox resting in a sunlit forest."
+      ]
+    },
+    {
+      "id": 2,
+      "type": "TextGenerate",
+      "pos": [
+        470,
+        100
+      ],
+      "size": [
+        340,
+        340
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 2,
+          "widget": {
+            "name": "prompt"
+          }
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "system_prompt",
+          "type": "STRING",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "generated_text",
+          "type": "STRING",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "thinking",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextGenerate"
+      },
+      "widgets_values": [
+        "",
+        7000,
+        "off",
+        false,
+        true,
+        "auto"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "BriaVGLValidate",
+      "pos": [
+        890,
+        100
+      ],
+      "size": [
+        340,
+        340
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "generated_text",
+          "type": "STRING",
+          "link": 3
+        },
+        {
+          "name": "require_edit_instruction",
+          "type": "BOOLEAN",
+          "link": 4,
+          "widget": {
+            "name": "require_edit_instruction"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "vgl_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "short_description",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BriaVGLValidate"
+      },
+      "widgets_values": [
+        false
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      3,
+      "STRING"
+    ],
+    [
+      2,
+      1,
+      1,
+      2,
+      1,
+      "STRING"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      0,
+      "STRING"
+    ],
+    [
+      4,
+      1,
+      4,
+      3,
+      1,
+      "BOOLEAN"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

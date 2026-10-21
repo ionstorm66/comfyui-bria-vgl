@@ -4,6 +4,10 @@ Create prompts using [Bria-AI/vgl](https://github.com/Bria-AI/vgl).
 Includes **Bria VGL Prompt** and **Bria VGL Text Input**, under `Bria/VGL`.
 Requires Python 3.10+ and credentials for your selected provider.
 
+For local generation without provider credentials, use **Bria VGL Prepare (Local)**
+and **Bria VGL Validate** around ComfyUI's built-in **Generate Text** node.
+See the [local/subgraph guide](docs/LOCAL.md) and `examples/local_vgl.json`.
+
 ## Install
 
 Copy this folder into `ComfyUI/custom_nodes/comfyui-bria-vgl`.

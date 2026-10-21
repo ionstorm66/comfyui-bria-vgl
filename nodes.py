@@ -250,11 +250,109 @@ class BriaVGLTextInput:
         return (text,)
 
 
+def local_vgl_dependencies():
+    try:
+        from bria_vgl.dialects.thales import Generate, Caption, Inspire, EditImageWithMask
+        from bria_vgl.dialects.thales.model import ThalesVGL
+        from bria_vgl.prompting import render_prompts
+    except ImportError as exc:
+        raise RuntimeError("Install this node's requirements.txt using ComfyUI's Python, then restart ComfyUI.") from exc
+    return Generate, Caption, Inspire, EditImageWithMask, ThalesVGL, render_prompts
+
+
+class BriaVGLPrepare:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"text": ("STRING", {"default": "", "multiline": True})},
+                "optional": {"image": ("IMAGE",), "mask": ("MASK",)}}
+
+    RETURN_TYPES = ("STRING", "STRING", "IMAGE", "IMAGE", "BOOLEAN")
+    RETURN_NAMES = ("system_prompt", "prompt", "image", "masked_image", "require_edit_instruction")
+    FUNCTION = "prepare"
+    CATEGORY = "Bria/VGL"
+    DESCRIPTION = "Prepare Bria's VGL instructions for ComfyUI Generate Text. No provider or API key required."
+
+    def prepare(self, text, image=None, mask=None):
+        check_interrupted()
+        text = text.strip()
+        if mask is not None and (image is None or not text):
+            raise ValueError("A mask requires an image and nonempty edit text.")
+        if not text and image is None:
+            raise ValueError("VGL needs text, an image, or both.")
+        Generate, Caption, Inspire, EditImageWithMask, model, render = local_vgl_dependencies()
+        pil_image = image_to_pil(image) if image is not None else None
+        pil_mask = mask_to_pil(mask, pil_image.size) if mask is not None else None
+        if pil_mask is not None:
+            payload = EditImageWithMask(prompt=text, image=pil_image, mask=pil_mask)
+        elif pil_image is None:
+            payload = Generate(prompt=text)
+        elif text:
+            payload = Inspire(prompt=text, image=pil_image)
+        else:
+            payload = Caption(image=pil_image)
+        request = payload.to_request()
+        system, prompt = render(request.prompts, request.context,
+                                system_template=request.system_prompt, final_template=request.final_prompt)
+        schema = model.model_json_schema()
+        if mask is not None:
+            schema.setdefault("required", []).append("edit_instruction")
+        system += ("\n\nReturn exactly one JSON object matching the following JSON Schema. "
+                   "Do not include Markdown fences, commentary, or reasoning.\n" + json.dumps(schema))
+        if mask is not None:
+            system += "\nInclude a nonempty edit_instruction describing the requested change."
+        prepared_image = None
+        if request.images:
+            import numpy as np
+            import torch
+            prepared_image = torch.from_numpy(
+                np.asarray(request.images[0].convert("RGB"), dtype=np.float32)[None, ...].copy() / 255.0)
+        reference = masked_image_output(pil_image, pil_mask) if pil_mask is not None else image
+        check_interrupted()
+        return system, prompt, prepared_image, reference, mask is not None
+
+
+class BriaVGLValidate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"generated_text": ("STRING", {"forceInput": True})},
+                "optional": {"require_edit_instruction": ("BOOLEAN", {"default": False})}}
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("vgl_json", "short_description")
+    FUNCTION = "validate"
+    CATEGORY = "Bria/VGL"
+    DESCRIPTION = "Validate local model output against Bria's Thales VGL model before using it as a prompt."
+
+    def validate(self, generated_text, require_edit_instruction=False):
+        check_interrupted()
+        model = local_vgl_dependencies()[4]
+        text = generated_text.strip()
+        # Accept a single enclosing JSON fence, but never guess where prose ends.
+        lines = text.splitlines()
+        if len(lines) >= 3 and lines[0].lower() in ("```json", "```") and lines[-1] == "```":
+            text = "\n".join(lines[1:-1])
+        try:
+            scene = model.model_validate_json(text, strict=True)
+            if not scene.short_description.strip():
+                raise ValueError("short_description must not be empty")
+            if require_edit_instruction and not (scene.edit_instruction or "").strip():
+                raise ValueError("masked edits require a nonempty edit_instruction")
+        except ValueError as exc:
+            raise ValueError("Invalid VGL from Generate Text. Check the model, prompt, and max_length "
+                             f"(the response may be truncated). Details: {exc}") from exc
+        check_interrupted()
+        return scene.model_dump_json(indent=2, exclude_none=True), scene.short_description
+
+
 NODE_CLASS_MAPPINGS = {
+    "BriaVGLPrepare": BriaVGLPrepare,
+    "BriaVGLValidate": BriaVGLValidate,
     "BriaVGLPrompt": BriaVGLPrompt,
     "BriaVGLTextInput": BriaVGLTextInput,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "BriaVGLPrepare": "Bria VGL Prepare (Local)",
+    "BriaVGLValidate": "Bria VGL Validate",
     "BriaVGLPrompt": "Bria VGL Prompt",
     "BriaVGLTextInput": "Bria VGL Text Input",
 }
