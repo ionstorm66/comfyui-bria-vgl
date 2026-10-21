@@ -150,17 +150,22 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(list(result.getdata()), [0, 0, 128, 255, 255])
         self.assertEqual(result.tobytes(), mask_to_pil(mask[0], (5, 1)).tobytes())
 
-    def test_converted_mask_output_matches_prompt_and_cache(self):
+    def test_masked_image_matches_fibo_threshold_and_cache(self):
         node = BriaVGLPrompt()
-        image = Tensor(np.zeros((1, 1, 3, 3)))
-        mask = Tensor([[[0, 0.5, 1]]])
+        image = Tensor(np.array([[[[1, 0, 0], [0, 1, 0], [0, 0, 1],
+                                   [1, 1, 0], [0, 1, 1]]]], dtype=np.float32))
+        original = image.data.copy()
+        mask = Tensor([[[0, 127 / 255, 128 / 255, 0.5, 1]]])
         result = node.generate("edit", "Google AI Studio", image=image, mask=mask)
         output = result[1]
-        self.assertEqual(output.shape, (1, 1, 3, 3))
+        self.assertEqual(output.shape, (1, 1, 5, 3))
         self.assertEqual(output.dtype, np.float32)
-        expected = np.asarray(self.calls[-1][0].mask.convert("RGB"), dtype=np.float32) / 255
+        expected = np.array([[[255, 0, 0], [0, 255, 0], [128, 128, 128],
+                              [128, 128, 128], [128, 128, 128]]], dtype=np.float32) / 255
         np.testing.assert_array_equal(output[0], expected)
-        self.assertAlmostEqual(float(output[0, 0, 1, 0]), 128 / 255)
+        np.testing.assert_array_equal(image.data, original)
+        # Prompting still receives soft grayscale, not a binary mask.
+        self.assertEqual(list(self.calls[-1][0].mask.tobytes()), [0, 127, 128, 128, 255])
         output[:] = 0
         cached = node.generate("edit", "Google AI Studio", image=image, mask=mask)
         self.assertEqual(len(self.calls), 1)
@@ -169,7 +174,7 @@ class NodeTests(unittest.TestCase):
         mask.data[0, 0, 0] = 1
         changed = node.generate("edit", "Google AI Studio", image=image, mask=mask)
         self.assertEqual(len(self.calls), 2)
-        self.assertEqual(float(changed[1][0, 0, 0, 0]), 1)
+        self.assertAlmostEqual(float(changed[1][0, 0, 0, 0]), 128 / 255)
 
     def test_no_mask_has_empty_image_output(self):
         node = BriaVGLPrompt()

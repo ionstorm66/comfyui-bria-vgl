@@ -147,14 +147,18 @@ def mask_to_pil(mask, image_size):
     return Image.fromarray(pixels)
 
 
-def mask_to_image_output(mask):
-    """Expose the quantized mask as a ComfyUI RGB IMAGE tensor."""
+def masked_image_output(image, mask):
+    """FIBO2 grey_out preprocessing, before the encoder resizes/crops."""
     if mask is None:
         return None
     import numpy as np
     import torch
+    from PIL import Image
 
-    pixels = np.asarray(mask.convert("RGB"), dtype=np.float32) / 255.0
+    gray = Image.new("RGB", image.size, (128, 128, 128))
+    binary_mask = mask.convert("L").point(lambda value: 255 if value >= 128 else 0)
+    composite = Image.composite(gray, image.convert("RGB"), binary_mask)
+    pixels = np.asarray(composite, dtype=np.float32) / 255.0
     return torch.from_numpy(pixels[None, ...].copy())
 
 
@@ -197,10 +201,10 @@ class BriaVGLPrompt:
         }
 
     RETURN_TYPES = ("STRING", "IMAGE")
-    RETURN_NAMES = ("text", "converted_mask")
+    RETURN_NAMES = ("text", "masked_image")
     OUTPUT_TOOLTIPS = (
         "Generated VGL JSON or short description.",
-        "Converted grayscale mask as an RGB image. Empty when no mask is connected.",
+        "Source image with mask values >=128 filled with RGB(128,128,128). Connect to FIBO2 image_1. Empty without a mask.",
     )
     FUNCTION = "generate"
     CATEGORY = "Bria/VGL"
@@ -220,16 +224,16 @@ class BriaVGLPrompt:
         llm = resolve_model(provider, model)
         pil_image = image_to_pil(image) if image is not None else None
         pil_mask = mask_to_pil(mask, pil_image.size) if mask is not None else None
-        converted_mask = mask_to_image_output(pil_mask)
+        masked_image = masked_image_output(pil_image, pil_mask)
         key = self.cache_key(text, provider, llm, output_format, seed, pil_image, pil_mask)
         check_interrupted()
         cached = self._cached_prompt
         if cached is not None and cached[0] == key:
-            return (cached[1], converted_mask)
+            return (cached[1], masked_image)
         result = run_vgl(text, llm, seed, output_format, pil_image, timeout_seconds, mask=pil_mask)
         check_interrupted()
         self._cached_prompt = (key, result)
-        return (result, converted_mask)
+        return (result, masked_image)
 
 
 class BriaVGLTextInput:

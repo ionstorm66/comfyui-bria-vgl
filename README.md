@@ -57,21 +57,45 @@ One mask is accepted as `[1, height, width]` or `[height, width]`. Its dimension
 must match the image; resize it upstream if necessary. A connected mask requires
 both an image and nonempty edit text. Disconnect the mask for normal generation.
 
-The second output, **converted_mask** (IMAGE), exposes the exact 8-bit grayscale
-mask passed to VGL, displayed as equal RGB channels in ComfyUI's 0–1 image format.
-Connect it to **Preview Image** to inspect it. Soft values reflect the 8-bit
-conversion (for example, 0.5 becomes 128/255). It has the input image's dimensions.
+The second output, **masked_image** (IMAGE), is the complete source image with
+the edit region filled with flat **RGB (128, 128, 128)**. It matches the
+[FIBO2 pipeline's grey_out preprocessing](https://github.com/muhammadali-afridi/diffusers/blob/ali/fibo2/src/diffusers/pipelines/bria_fibo2/image_processor.py):
+the converted 8-bit mask is made binary at **128**. Values at or above 128 replace
+the source pixel with gray; lower values retain the converted RGB source pixel.
+The original input is not modified. Output dimensions match the source image;
+the FIBO2 encoder performs its own subsequent resizing/cropping.
+
+#### Wiring to TextEncodeFibo2
+
+**Feed Bria VGL Prompt's `masked_image` output into TextEncodeFibo2's `image_1` input.**
+Use the following connections for masked editing:
+
+| Source | Destination |
+| --- | --- |
+| Original image (IMAGE) | Bria VGL Prompt → `image` |
+| ComfyUI mask (MASK) | Bria VGL Prompt → `mask` |
+| Edit instruction text | Bria VGL Prompt → `text` |
+| Bria VGL Prompt → `text` (select **VGL JSON**) | TextEncodeFibo2 → `prompt` |
+| Bria VGL Prompt → `masked_image` | TextEncodeFibo2 → `image_1` |
+| VAE loader → VAE | TextEncodeFibo2 → `vae` |
+
+The original image must be connected to Bria VGL Prompt itself, even if it is
+already connected elsewhere in the workflow. Leave `image_2` unused unless
+providing another reference image; it is not a mask input. Connect `masked_image`
+to **Preview Image** to inspect the gray-filled reference before generation.
+
 Without a mask input this output is `None`; leave its downstream image nodes
 disconnected when running without a mask.
 
-This output is the grayscale mask, not the source image with its masked region
-painted gray. It does not turn FIBO2's `image_2` reference input into a mask input.
-The first output remains **text**, preserving existing text connections.
+This replaces the former **converted_mask** output at the same socket index.
+The first output remains **text**. VGL prompting still uses the soft grayscale
+mask; thresholding applies only to the FIBO2 reference image output.
 
 VGL uses the mask to mark the requested region in the image shown to the vision
-model. The output is still prompt text, not edited pixels. Use **VGL JSON** to
-retain the structured edit instruction; downstream image editing must enforce
-the mask. A vision-capable provider is required.
+model. The node outputs prompt text and a prepared reference image, not a
+generated edit. Use **VGL JSON** to retain the structured edit instruction.
+For exact preservation outside the mask, composite the generated result onto
+the original with matching dimensions/alignment. A vision-capable provider is required.
 
 ### Prompt cache
 
