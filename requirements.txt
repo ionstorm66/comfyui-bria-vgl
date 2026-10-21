@@ -1,0 +1,3 @@
+bria-vgl[vertex,bedrock]>=0.9.0,<0.10.0
+numpy>=1.23
+Pillow>=9.1
