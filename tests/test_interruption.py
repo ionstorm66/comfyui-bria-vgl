@@ -70,6 +70,15 @@ class InterruptionTests(unittest.TestCase):
         })
         self.assert_cleaned()
 
+    def test_mask_roundtrip_through_worker(self):
+        mask = Image.frombytes("L", (3, 1), bytes([0, 128, 255]))
+        result = nodes.run_vgl("edit", "openai/test", 7, "VGL JSON",
+                               Image.new("RGB", (3, 1)), 10, mask=mask)
+        self.assertEqual(json.loads(result), {
+            "mask_mode": "L", "mask_size": [3, 1], "mask_pixels": [0, 128, 255],
+        })
+        self.assert_cleaned()
+
     def test_provider_error_roundtrip(self):
         with self.assertRaisesRegex(RuntimeError, "test provider failure"):
             self.run_request("__error__")

@@ -32,6 +32,7 @@ python -m pip install -r custom_nodes/comfyui-bria-vgl/requirements.txt
 | Text only | Generate a scene prompt |
 | Image only (blank text) | Describe the image |
 | Text + image | Create the text's requested scene using the image as inspiration |
+| Text + image + mask | Describe an edit to the masked region |
 
 `VGL JSON` returns the complete structured scene as a STRING, suitable for a
 VGL-aware workflow such as FIBO. `Short description` returns the scene's concise
@@ -42,6 +43,54 @@ Exactly one image is accepted. Select a single image from a batch upstream.
 ComfyUI float images are converted to RGB; transparent pixels are composited on white.
 Changing the seed requests a new result; repeatability depends on the provider.
 ComfyUI can reuse cached output when inputs are unchanged.
+
+### Masked edits
+
+Connect a standard ComfyUI **MASK** to the optional `mask` input, connect the
+matching image, and enter an edit instruction such as "replace the chair with
+a blue armchair." The node calls VGL's `EditImageWithMask` through `modify()`.
+
+Mask values are converted directly from 0–1 to an 8-bit grayscale PNG:
+**1 becomes white (edit)**, **0 becomes black (keep)**, and intermediate values
+remain soft grayscale values. No inversion or thresholding is applied.
+One mask is accepted as `[1, height, width]` or `[height, width]`. Its dimensions
+must match the image; resize it upstream if necessary. A connected mask requires
+both an image and nonempty edit text. Disconnect the mask for normal generation.
+
+The second output, **converted_mask** (IMAGE), exposes the exact 8-bit grayscale
+mask passed to VGL, displayed as equal RGB channels in ComfyUI's 0–1 image format.
+Connect it to **Preview Image** to inspect it. Soft values reflect the 8-bit
+conversion (for example, 0.5 becomes 128/255). It has the input image's dimensions.
+Without a mask input this output is `None`; leave its downstream image nodes
+disconnected when running without a mask.
+
+This output is the grayscale mask, not the source image with its masked region
+painted gray. It does not turn FIBO2's `image_2` reference input into a mask input.
+The first output remains **text**, preserving existing text connections.
+
+VGL uses the mask to mark the requested region in the image shown to the vision
+model. The output is still prompt text, not edited pixels. Use **VGL JSON** to
+retain the structured edit instruction; downstream image editing must enforce
+the mask. A vision-capable provider is required.
+
+### Prompt cache
+
+Each **Bria VGL Prompt** node also keeps its last successful result in memory.
+If it executes again with the same text, provider/resolved model, output format,
+seed, image content, and mask content, it returns that text without starting an API worker.
+Keep the seed's control-after-generate setting on **fixed** to reuse a request.
+
+The image is compared by its converted RGB pixels and dimensions, so reloading
+the same image does not require a new request. Changing the seed or another
+generation input creates a new request. Changing only the timeout reuses a
+successful cached result. Changes to the configured OpenAI base URLs, Vertex
+project/location, or AWS profile/region invalidate this node's cache when it runs.
+
+Only successful, uninterrupted results are cached; errors, timeouts, and canceled
+requests are not. This cache holds one result per node instance and is cleared
+when the instance is recreated or ComfyUI restarts. No cache files are written.
+Python integrations can call the node's `clear_cache()` method; in the UI, change
+the seed to request a fresh result. ComfyUI's own execution cache remains separate.
 
 ## Providers and credentials
 

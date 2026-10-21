@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from nodes import BriaVGLPrompt, BriaVGLTextInput, image_to_pil, resolve_model
+from nodes import BriaVGLPrompt, BriaVGLTextInput, image_to_pil, mask_to_pil, resolve_model
 import vgl_worker
 
 
@@ -51,6 +51,10 @@ class Inspire(Payload):
     pass
 
 
+class EditImageWithMask(Payload):
+    pass
+
+
 class Scene:
     short_description = "A red fox."
 
@@ -61,14 +65,23 @@ class Scene:
 class NodeTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
+        interrupt = patch("nodes.check_interrupted")
+        self.interrupt = interrupt.start()
+        self.addCleanup(interrupt.stop)
         api = types.ModuleType("bria_vgl")
+        # Test IMAGE layout without installing ComfyUI/PyTorch.
+        torch = types.ModuleType("torch")
+        torch.from_numpy = lambda array: array
         def create(payload, **kwargs):
             self.calls.append((payload, kwargs))
             return Scene()
         api.create = create
+        api.modify = create
         dialect = types.ModuleType("bria_vgl.dialects.thales")
         dialect.Generate, dialect.Caption, dialect.Inspire = Generate, Caption, Inspire
+        dialect.EditImageWithMask = EditImageWithMask
         self.modules = patch.dict(sys.modules, {
+            "torch": torch,
             "bria_vgl": api,
             "bria_vgl.dialects": types.ModuleType("bria_vgl.dialects"),
             "bria_vgl.dialects.thales": dialect,
@@ -76,8 +89,8 @@ class NodeTests(unittest.TestCase):
         self.modules.start()
         self.addCleanup(self.modules.stop)
         # Real worker logic with a fake provider; process tests are separate.
-        runner = patch("nodes.run_vgl", side_effect=lambda text, llm, seed, output_format, image, timeout_seconds:
-                       vgl_worker.generate(text, llm, seed, output_format, image))
+        runner = patch("nodes.run_vgl", side_effect=lambda text, llm, seed, output_format, image, timeout_seconds, mask=None:
+                       vgl_worker.generate(text, llm, seed, output_format, image, mask))
         runner.start()
         self.addCleanup(runner.stop)
 
@@ -94,7 +107,7 @@ class NodeTests(unittest.TestCase):
         for text, expected in [("", Caption), ("fox", Inspire)]:
             with self.subTest(text=text):
                 result = BriaVGLPrompt().generate(text, "Google AI Studio", image=image, output_format="Short description")
-                self.assertEqual(result, ("A red fox.",))
+                self.assertEqual(result, ("A red fox.", None))
                 payload = self.calls[-1][0]
                 self.assertIsInstance(payload, expected)
                 self.assertEqual(payload.image.size, (4, 3))
@@ -130,8 +143,154 @@ class NodeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "quota exhausted"):
                 BriaVGLPrompt().generate("fox", "Google AI Studio")
 
+    def test_mask_conversion(self):
+        mask = Tensor([[[-0.2, 0, 0.5, 1, 1.2]]])
+        result = mask_to_pil(mask, (5, 1))
+        self.assertEqual(result.mode, "L")
+        self.assertEqual(list(result.getdata()), [0, 0, 128, 255, 255])
+        self.assertEqual(result.tobytes(), mask_to_pil(mask[0], (5, 1)).tobytes())
+
+    def test_converted_mask_output_matches_prompt_and_cache(self):
+        node = BriaVGLPrompt()
+        image = Tensor(np.zeros((1, 1, 3, 3)))
+        mask = Tensor([[[0, 0.5, 1]]])
+        result = node.generate("edit", "Google AI Studio", image=image, mask=mask)
+        output = result[1]
+        self.assertEqual(output.shape, (1, 1, 3, 3))
+        self.assertEqual(output.dtype, np.float32)
+        expected = np.asarray(self.calls[-1][0].mask.convert("RGB"), dtype=np.float32) / 255
+        np.testing.assert_array_equal(output[0], expected)
+        self.assertAlmostEqual(float(output[0, 0, 1, 0]), 128 / 255)
+        output[:] = 0
+        cached = node.generate("edit", "Google AI Studio", image=image, mask=mask)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(cached[0], result[0])
+        np.testing.assert_array_equal(cached[1][0], expected)
+        mask.data[0, 0, 0] = 1
+        changed = node.generate("edit", "Google AI Studio", image=image, mask=mask)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(float(changed[1][0, 0, 0, 0]), 1)
+
+    def test_no_mask_has_empty_image_output(self):
+        node = BriaVGLPrompt()
+        self.assertIsNone(node.generate("fox", "Google AI Studio")[1])
+        self.assertIsNone(node.generate("fox", "Google AI Studio")[1])
+        self.assertEqual(BriaVGLPrompt.RETURN_TYPES, ("STRING", "IMAGE"))
+        self.assertEqual(BriaVGLTextInput.RETURN_TYPES, ("STRING",))
+
+    def test_invalid_masks(self):
+        for array in (np.zeros((2, 2, 3)), np.zeros((1, 2, 3, 1)),
+                      np.zeros((1, 0, 3)), np.full((1, 2, 3), np.nan),
+                      np.full((1, 2, 3), np.inf), np.zeros((1, 3, 2))):
+            with self.subTest(shape=array.shape):
+                with self.assertRaises(ValueError):
+                    mask_to_pil(Tensor(array), (3, 2))
+
+    def test_mask_requires_text_and_image(self):
+        mask = Tensor(np.ones((1, 2, 3)))
+        for text, image in (("edit", None), (" ", Tensor(np.zeros((1, 2, 3, 3))))):
+            with self.assertRaisesRegex(ValueError, "mask requires"):
+                BriaVGLPrompt().generate(text, "Google AI Studio", image=image, mask=mask)
+        self.assertFalse(self.calls)
+
+    def test_mask_uses_modify_and_invalidates_cache(self):
+        node = BriaVGLPrompt()
+        image = Tensor(np.zeros((1, 2, 3, 3)))
+        mask = Tensor(np.ones((1, 2, 3)))
+        with patch("bria_vgl.create", side_effect=AssertionError("Must use modify")):
+            node.generate("edit", "Google AI Studio", image=image, mask=mask)
+            payload = self.calls[-1][0]
+            self.assertIsInstance(payload, EditImageWithMask)
+            self.assertEqual(payload.mask.mode, "L")
+            self.assertEqual(payload.mask.size, payload.image.size)
+            node.generate("edit", "Google AI Studio", image=image, mask=Tensor(mask.data.copy()))
+            self.assertEqual(len(self.calls), 1)
+            mask.data[0, 0, 0] = 0
+            node.generate("edit", "Google AI Studio", image=image, mask=mask)
+            self.assertEqual(len(self.calls), 2)
+        node.generate("edit", "Google AI Studio", image=image)
+        self.assertEqual(len(self.calls), 3)
+        self.assertIsInstance(self.calls[-1][0], Inspire)
+
     def test_text_input(self):
         self.assertEqual(BriaVGLTextInput().value("hello\nworld"), ("hello\nworld",))
+
+    def test_same_inputs_and_seed_reuse_result(self):
+        node = BriaVGLPrompt()
+        first = node.generate("fox", "Google AI Studio", seed=7)
+        self.assertEqual(first, node.generate("fox", "Google AI Studio", seed=7))
+        self.assertEqual(len(self.calls), 1)
+        # Timeout is a wait limit, not a generation input.
+        self.assertEqual(first, node.generate("fox", "Google AI Studio", seed=7, timeout_seconds=90))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_each_generation_input_invalidates_cache(self):
+        for change in (
+            {"text": "owl"}, {"seed": 8}, {"provider": "Google Vertex AI"},
+            {"model": "another-model"}, {"output_format": "Short description"},
+        ):
+            with self.subTest(change=change):
+                node = BriaVGLPrompt()
+                args = {"text": "fox", "provider": "Google AI Studio", "seed": 7}
+                before = len(self.calls)
+                node.generate(**args)
+                node.generate(**(args | change))
+                self.assertEqual(len(self.calls), before + 2)
+
+    def test_images_use_pixels_not_tensor_identity(self):
+        node = BriaVGLPrompt()
+        image = Tensor(np.zeros((1, 2, 3, 3)))
+        node.generate("fox", "Google AI Studio", image=image)
+        node.generate("fox", "Google AI Studio", image=Tensor(image.data.copy()))
+        self.assertEqual(len(self.calls), 1)
+        image.data[0, 0, 0, 0] = 1
+        node.generate("fox", "Google AI Studio", image=image)
+        self.assertEqual(len(self.calls), 2)
+        node.generate("fox", "Google AI Studio", image=Tensor(np.zeros((1, 3, 2, 3))))
+        node.generate("fox", "Google AI Studio")
+        self.assertEqual(len(self.calls), 4)
+
+    def test_changed_endpoint_invalidates_cache(self):
+        import os
+        node = BriaVGLPrompt()
+        with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://first/v1"}):
+            node.generate("fox", "Custom (LiteLLM)", model="openai/test")
+        with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://second/v1"}):
+            node.generate("fox", "Custom (LiteLLM)", model="openai/test")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_failures_and_timeouts_are_not_cached(self):
+        for failure in (RuntimeError("failed"), TimeoutError("timed out")):
+            with self.subTest(failure=failure):
+                node = BriaVGLPrompt()
+                with patch("nodes.run_vgl", side_effect=[failure, "success"]) as run:
+                    with self.assertRaises(type(failure)):
+                        node.generate("fox", "Google AI Studio")
+                    self.assertEqual(node.generate("fox", "Google AI Studio"), ("success", None))
+                    self.assertEqual(node.generate("fox", "Google AI Studio"), ("success", None))
+                    self.assertEqual(run.call_count, 2)
+
+    def test_interrupted_result_is_not_cached(self):
+        class Interrupted(BaseException):
+            pass
+        node = BriaVGLPrompt()
+        self.interrupt.side_effect = [None, None, Interrupted()]
+        with self.assertRaises(Interrupted):
+            node.generate("fox", "Google AI Studio")
+        self.interrupt.side_effect = None
+        node.generate("fox", "Google AI Studio")
+        self.assertEqual(len(self.calls), 2)
+        self.interrupt.side_effect = Interrupted()
+        with self.assertRaises(Interrupted):
+            node.generate("fox", "Google AI Studio")
+
+    def test_clear_cache_and_instance_isolation(self):
+        first, second = BriaVGLPrompt(), BriaVGLPrompt()
+        first.generate("fox", "Google AI Studio")
+        second.generate("fox", "Google AI Studio")
+        first.clear_cache()
+        first.generate("fox", "Google AI Studio")
+        self.assertEqual(len(self.calls), 3)
 
 
 if __name__ == "__main__":

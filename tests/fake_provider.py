@@ -20,6 +20,10 @@ class Scene:
         self.payload, self.options = payload, options
 
     def model_dump_json(self, **kwargs):
+        if hasattr(self.payload, "mask"):
+            return json.dumps({"mask_mode": self.payload.mask.mode,
+                               "mask_size": list(self.payload.mask.size),
+                               "mask_pixels": list(self.payload.mask.getdata())})
         return json.dumps({
             "prompt": getattr(self.payload, "prompt", None),
             "llm": self.options["llm"],
@@ -41,8 +45,10 @@ def create(payload, **kwargs):
 
 api = types.ModuleType("bria_vgl")
 api.create = create
+api.modify = create
 dialect = types.ModuleType("bria_vgl.dialects.thales")
 dialect.Generate = dialect.Caption = dialect.Inspire = Payload
+dialect.EditImageWithMask = Payload
 sys.modules.update({
     "bria_vgl": api,
     "bria_vgl.dialects": types.ModuleType("bria_vgl.dialects"),
