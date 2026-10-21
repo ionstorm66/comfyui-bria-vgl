@@ -31,6 +31,22 @@ VGL's soft gray mask for vision. Its separate masked_image output uses FIBO's
 binary gray-out preprocessing. Without a mask, masked_image passes through the
 original image. With text only, leave both image outputs disconnected.
 
+For multiple references, connect one image each to **image**, **image_2**,
+**image_3**, and **image_4**, in order without gaps. Provide edit text using
+`<image_1>`, `<image_2>`, etc. Multiple references cannot be combined with a mask.
+The node uses Bria's multi-image edit templates and explains image order to the
+local model. Connect its **image** output directly to Generate Text's **image**
+input: it contains all references in one batch, for one generated response.
+Use a model supporting multiple images, such as Qwen3-VL.
+
+**max_image_size** defaults to 1024 pixels on the longest side. Images larger
+than this are resized with their aspect ratios preserved; smaller images are
+not enlarged. Gray padding makes all batch members the same width and height,
+without cropping. This resizing also applies to the single-image vision output.
+The **masked_image** output still preserves the original first image dimensions.
+Connect the original references individually to TextEncodeFibo2's image_1 through
+image_4 in the same order; the padded batch is for Generate Text.
+
 Select the three nodes and use ComfyUI's Convert to Subgraph action. Expose text,
 CLIP, optional image/mask, and generation settings as inputs, and vgl_json,
 short_description, and masked_image as outputs. The supplied
@@ -38,7 +54,7 @@ short_description, and masked_image as outputs. The supplied
 model loader and downstream FIBO node after importing it.
 
 Validation accepts raw JSON or one enclosing JSON Markdown fence. It uses strict
-ThalesVGL type validation and requires a nonempty short description; masked edits
+ThalesVGL type validation and requires a nonempty short description; masked and multi-image edits
 also require a nonempty edit_instruction. Unknown fields are dropped by Bria's
 model. Validation does not assess visual accuracy, enforce every natural-language
 field guideline, or retry generation. On failure, increase max_length if output

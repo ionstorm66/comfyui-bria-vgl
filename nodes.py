@@ -283,7 +283,10 @@ class BriaVGLPrepare:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {"text": ("STRING", {"default": "", "multiline": True})},
-                "optional": {"image": ("IMAGE",), "mask": ("MASK",)}}
+                "optional": {"image": ("IMAGE",), "mask": ("MASK",),
+                             "image_2": ("IMAGE",), "image_3": ("IMAGE",), "image_4": ("IMAGE",),
+                             "max_image_size": ("INT", {"default": 1024, "min": 32, "max": 4096,
+                                 "step": 32, "tooltip": "Maximum side for the vision batch. Images are fitted without cropping and padded to matching dimensions."})}}
 
     RETURN_TYPES = ("STRING", "STRING", "IMAGE", "IMAGE", "BOOLEAN")
     RETURN_NAMES = ("system_prompt", "prompt", "image", "masked_image", "require_edit_instruction")
@@ -291,9 +294,19 @@ class BriaVGLPrepare:
     CATEGORY = "Bria/VGL"
     DESCRIPTION = "Prepare Bria's VGL instructions for ComfyUI Generate Text. No provider or API key required."
 
-    def prepare(self, text, image=None, mask=None):
+    def prepare(self, text, image=None, mask=None, image_2=None, image_3=None, image_4=None,
+                max_image_size=1024):
         check_interrupted()
         text = text.strip()
+        references = [image, image_2, image_3, image_4]
+        for index, reference in enumerate(references[1:], start=1):
+            if reference is not None and references[index - 1] is None:
+                raise ValueError("Connect reference images in order: image, image_2, image_3, image_4; do not skip inputs.")
+        extra_images = [image_to_pil(ref) for ref in references[1:] if ref is not None]
+        if extra_images and (not text or mask is not None):
+            raise ValueError("Multiple reference images require nonempty edit text and cannot be combined with a mask.")
+        if not isinstance(max_image_size, int) or not 32 <= max_image_size <= 4096:
+            raise ValueError("max_image_size must be an integer between 32 and 4096.")
         if mask is not None and (image is None or not text):
             raise ValueError("A mask requires an image and nonempty edit text.")
         if not text and image is None:
@@ -301,7 +314,10 @@ class BriaVGLPrepare:
         Generate, Caption, Inspire, EditImageWithMask, model, render = local_vgl_dependencies()
         pil_image = image_to_pil(image) if image is not None else None
         pil_mask = mask_to_pil(mask, pil_image.size) if mask is not None else None
-        if pil_mask is not None:
+        if extra_images:
+            from bria_vgl.dialects.thales import EditImages
+            payload = EditImages(prompt=text, images=[pil_image, *extra_images])
+        elif pil_mask is not None:
             payload = EditImageWithMask(prompt=text, image=pil_image, mask=pil_mask)
         elif pil_image is None:
             payload = Generate(prompt=text)
@@ -313,21 +329,36 @@ class BriaVGLPrepare:
         system, prompt = render(request.prompts, request.context,
                                 system_template=request.system_prompt, final_template=request.final_prompt)
         schema = model.model_json_schema()
-        if mask is not None:
+        requires_edit = mask is not None or bool(extra_images)
+        if requires_edit:
             schema.setdefault("required", []).append("edit_instruction")
         system += ("\n\nReturn exactly one JSON object matching the following JSON Schema. "
                    "Do not include Markdown fences, commentary, or reasoning.\n" + json.dumps(schema))
-        if mask is not None:
+        if requires_edit:
             system += "\nInclude a nonempty edit_instruction describing the requested change."
+        if extra_images:
+            prompt = ("The attached images are ordered: " +
+                      ", ".join(f"image {i} is <image_{i}>" for i in range(1, len(extra_images) + 2)) +
+                      ". Padding is not part of the source scene.\n\n" + prompt)
         prepared_image = None
         if request.images:
             import numpy as np
             import torch
-            prepared_image = torch.from_numpy(
-                np.asarray(request.images[0].convert("RGB"), dtype=np.float32)[None, ...].copy() / 255.0)
+            from PIL import Image, ImageOps
+            fitted = [ImageOps.contain(im.convert("RGB"), (max_image_size, max_image_size),
+                                       method=Image.Resampling.LANCZOS)
+                      if max(im.size) > max_image_size else im.convert("RGB") for im in request.images]
+            width = max(im.width for im in fitted)
+            height = max(im.height for im in fitted)
+            canvases = []
+            for im in fitted:
+                canvas = Image.new("RGB", (width, height), (128, 128, 128))
+                canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
+                canvases.append(np.asarray(canvas, dtype=np.float32) / 255.0)
+            prepared_image = torch.from_numpy(np.stack(canvases))
         reference = masked_image_output(pil_image, pil_mask) if pil_mask is not None else image
         check_interrupted()
-        return system, prompt, prepared_image, reference, mask is not None
+        return system, prompt, prepared_image, reference, requires_edit
 
 
 class BriaVGLValidate:
@@ -355,7 +386,7 @@ class BriaVGLValidate:
             if not scene.short_description.strip():
                 raise ValueError("short_description must not be empty")
             if require_edit_instruction and not (scene.edit_instruction or "").strip():
-                raise ValueError("masked edits require a nonempty edit_instruction")
+                raise ValueError("edits require a nonempty edit_instruction")
         except ValueError as exc:
             raise ValueError("Invalid VGL from Generate Text. Check the model, prompt, and max_length "
                              f"(the response may be truncated). Details: {exc}") from exc

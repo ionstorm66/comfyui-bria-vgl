@@ -51,9 +51,32 @@ class LocalTests(unittest.TestCase):
             self.assertAlmostEqual(float(result[3][0, 0, 1, 1]), 128 / 255)
 
     def test_bad_inputs(self):
-        for args in ({"text": " "}, {"text": "edit", "mask": Tensor([[[1.]]])}):
+        source = Tensor([[[[1., 0., 0.]]]])
+        for args in ({"text": " "}, {"text": "edit", "mask": Tensor([[[1.]]])},
+                     {"text": "edit", "image_2": source},
+                     {"text": "", "image": source, "image_2": source},
+                     {"text": "edit", "image": source, "image_2": source, "mask": Tensor([[[1.]]])},
+                     {"text": "edit", "max_image_size": 0}):
             with self.assertRaises(ValueError):
                 BriaVGLPrepare().prepare(**args)
+
+    def test_multi_image_batch_preserves_order_and_aspect(self):
+        import numpy as np
+        portrait = Tensor(np.tile([1., 0., 0.], (1, 128, 64, 1)))
+        landscape = Tensor(np.tile([0., 1., 0.], (1, 32, 64, 1)))
+        system, prompt, batch, reference, edit = BriaVGLPrepare().prepare(
+            "Use the object from <image_2> in <image_1>", portrait,
+            image_2=landscape, image_3=landscape, image_4=portrait, max_image_size=64)
+        self.assertEqual(batch.shape, (4, 64, 64, 3))
+        self.assertEqual(batch.dtype, np.float32)
+        np.testing.assert_array_equal(batch[0, 32, 32], [1., 0., 0.])
+        np.testing.assert_array_equal(batch[1, 32, 32], [0., 1., 0.])
+        np.testing.assert_allclose(batch[0, 32, 0], [128 / 255] * 3)
+        np.testing.assert_allclose(batch[1, 0, 32], [128 / 255] * 3)
+        self.assertIs(reference, portrait)
+        self.assertTrue(edit)
+        self.assertIn("image 4 is <image_4>", prompt)
+        self.assertIn("nonempty edit_instruction", system)
 
     def test_worker_uses_real_multi_image_payload(self):
         from PIL import Image

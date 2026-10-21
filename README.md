@@ -65,7 +65,8 @@ same order; VGL outputs a prompt, not the edited image. All reference images
 participate in the prompt cache, so changing any reference requests a new result.
 
 This feature applies to the provider-backed **Bria VGL Prompt** node.
-**Bria VGL Prepare (Local)** retains its single-image Generate Text workflow.
+**Bria VGL Prepare (Local)** also accepts four references and outputs a resized,
+padded image batch for Generate Text; see [local setup](docs/LOCAL.md).
 
 ### Masked edits
 
