@@ -84,8 +84,10 @@ already connected elsewhere in the workflow. Leave `image_2` unused unless
 providing another reference image; it is not a mask input. Connect `masked_image`
 to **Preview Image** to inspect the gray-filled reference before generation.
 
-Without a mask input this output is `None`; leave its downstream image nodes
-disconnected when running without a mask.
+Without a mask input, **masked_image** passes through the original input image
+unchanged, without quantizing or compositing its pixels. This also applies when
+the prompt is served from cache. If no image is connected (text-only generation),
+the image output is `None`; leave downstream image nodes disconnected in that case.
 
 This replaces the former **converted_mask** output at the same socket index.
 The first output remains **text**. VGL prompting still uses the soft grayscale

@@ -107,7 +107,8 @@ class NodeTests(unittest.TestCase):
         for text, expected in [("", Caption), ("fox", Inspire)]:
             with self.subTest(text=text):
                 result = BriaVGLPrompt().generate(text, "Google AI Studio", image=image, output_format="Short description")
-                self.assertEqual(result, ("A red fox.", None))
+                self.assertEqual(result[0], "A red fox.")
+                self.assertIs(result[1], image)
                 payload = self.calls[-1][0]
                 self.assertIsInstance(payload, expected)
                 self.assertEqual(payload.image.size, (4, 3))
@@ -176,7 +177,16 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertAlmostEqual(float(changed[1][0, 0, 0, 0]), 128 / 255)
 
-    def test_no_mask_has_empty_image_output(self):
+    def test_image_passthrough_without_mask_including_cache(self):
+        node = BriaVGLPrompt()
+        image = Tensor(np.full((1, 2, 3, 3), 0.123456, dtype=np.float32))
+        self.assertIs(node.generate("fox", "Google AI Studio", image=image)[1], image)
+        replacement = Tensor(image.data.copy())
+        self.assertIs(node.generate("fox", "Google AI Studio", image=replacement)[1], replacement)
+        self.assertEqual(len(self.calls), 1)
+        np.testing.assert_array_equal(image.data, replacement.data)
+
+    def test_no_image_has_empty_image_output(self):
         node = BriaVGLPrompt()
         self.assertIsNone(node.generate("fox", "Google AI Studio")[1])
         self.assertIsNone(node.generate("fox", "Google AI Studio")[1])

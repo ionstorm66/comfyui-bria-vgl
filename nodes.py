@@ -204,7 +204,7 @@ class BriaVGLPrompt:
     RETURN_NAMES = ("text", "masked_image")
     OUTPUT_TOOLTIPS = (
         "Generated VGL JSON or short description.",
-        "Source image with mask values >=128 filled with RGB(128,128,128). Connect to FIBO2 image_1. Empty without a mask.",
+        "Source image with mask values >=128 filled with RGB(128,128,128). Without a mask, passes through the original image. Connect to FIBO2 image_1.",
     )
     FUNCTION = "generate"
     CATEGORY = "Bria/VGL"
@@ -224,7 +224,7 @@ class BriaVGLPrompt:
         llm = resolve_model(provider, model)
         pil_image = image_to_pil(image) if image is not None else None
         pil_mask = mask_to_pil(mask, pil_image.size) if mask is not None else None
-        masked_image = masked_image_output(pil_image, pil_mask)
+        masked_image = masked_image_output(pil_image, pil_mask) if pil_mask is not None else image
         key = self.cache_key(text, provider, llm, output_format, seed, pil_image, pil_mask)
         check_interrupted()
         cached = self._cached_prompt
