@@ -153,6 +153,12 @@ Windows and Linux/macOS examples, and troubleshooting.
 
 ## Stop and timeout
 
+If a provider returns `text_render` entries as plain strings, **Bria VGL Prompt**
+converts them to text objects before SDK validation, preserving the exact text.
+Missing location, size, color, and font are marked `unspecified`; existing text
+objects are preserved. Other schema errors still fail validation. This repair
+does not make another provider request.
+
 Click ComfyUI's **Stop/Interrupt** button to cancel a running request. The node
 checks for interruption roughly every 0.1 seconds while waiting and terminates
 its isolated local VGL worker. It propagates ComfyUI's normal interruption

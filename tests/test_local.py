@@ -99,6 +99,29 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(json.loads(output), self.scene)
             self.assertEqual(short, self.scene["short_description"])
 
+    def test_worker_normalizes_text_renders_before_sdk_validation(self):
+        import vgl_worker
+        structured = {"text": "Title", "location": "top", "size": "large",
+                      "color": "red", "font": "serif"}
+        strings = ["テイラー・スウィフト特集", "TAYLOR SWIFT!", "10月号"]
+        reply = self.scene | {"text_render": [*strings, structured]}
+        with patch("bria_vgl.gateway.call", return_value=json.dumps(reply)) as call:
+            output = json.loads(vgl_worker.generate("a cover", "openai/test", 0, "VGL JSON"))
+        call.assert_called_once()
+        self.assertEqual([item["text"] for item in output["text_render"]], [*strings, "Title"])
+        self.assertEqual(output["text_render"][-1], structured)
+        self.assertEqual(output["text_render"][0]["location"], "unspecified")
+
+    def test_worker_compatibility_keeps_other_validation_errors(self):
+        from bria_vgl.dialects.thales import Generate
+        from bria_vgl.exceptions import InvalidResponseError
+        from vgl_worker import compatible_payload
+        payload = compatible_payload(Generate(prompt="a cover"))
+        for reply in ("{", "[]", json.dumps(self.scene | {"text_render": [42]}),
+                      json.dumps(self.scene | {"text_render": ["Title"], "lighting": "daylight"})):
+            with self.subTest(reply=reply), self.assertRaises(InvalidResponseError):
+                payload.parse(reply)
+
     def test_invalid_and_incomplete_results(self):
         for value in ('{}', '[]', '{', 'Here is JSON: ' + json.dumps(self.scene),
                       json.dumps(self.scene | {"lighting": "daylight"}),

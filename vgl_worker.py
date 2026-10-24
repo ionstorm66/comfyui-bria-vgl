@@ -5,6 +5,28 @@ from pathlib import Path
 import sys
 
 
+def compatible_payload(payload):
+    """Adapt string-only text renders before the SDK validates its reply."""
+    class CompatiblePayload(type(payload)):
+        def parse(self, text):
+            try:
+                data = json.loads(text)
+            except (ValueError, TypeError):
+                return super().parse(text)
+            renders = data.get("text_render") if isinstance(data, dict) else None
+            if isinstance(renders, list) and any(isinstance(item, str) for item in renders):
+                data["text_render"] = [
+                    {"text": item, "location": "unspecified", "size": "unspecified",
+                     "color": "unspecified", "font": "unspecified"}
+                    if isinstance(item, str) else item
+                    for item in renders
+                ]
+                text = json.dumps(data, ensure_ascii=False)
+            return super().parse(text)
+
+    return CompatiblePayload(**vars(payload))
+
+
 def generate(text, llm, seed, output_format, image=None, mask=None, extra_images=None):
     try:
         import bria_vgl
@@ -29,7 +51,7 @@ def generate(text, llm, seed, output_format, image=None, mask=None, extra_images
     else:
         payload = Caption(image=image)
     operation = bria_vgl.modify if mask is not None or extra_images else bria_vgl.create
-    scene = operation(payload, llm=llm, seed=seed)
+    scene = operation(compatible_payload(payload), llm=llm, seed=seed)
     if output_format == "VGL JSON":
         return scene.model_dump_json(indent=2, exclude_none=True)
     result = scene.short_description
